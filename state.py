@@ -34,6 +34,9 @@ class PlatformState:
     initialized: bool
     # Epoch seconds of the last warning/update/reminder announced, or None.
     last_warned_at: float = None
+    # Highest store version ever observed (see the watermark in evaluate). None
+    # for rows written before this column existed -> falls back to store_version.
+    store_high: str = None
 
 
 @dataclass
@@ -51,6 +54,8 @@ class EvalResult:
     warning_active: bool = False
     initialized: bool = True
     last_warned_at: float = None
+    # The store watermark to persist (max store version ever seen).
+    store_high: str = None
 
 
 def evaluate(prev, github_version, store_version, compare,
@@ -74,6 +79,19 @@ def evaluate(prev, github_version, store_version, compare,
     store_behind = cmp < 0
     warn_condition = (cmp != 0) if strict_sync else store_ahead
 
+    # Highest store version ever observed. App-store version APIs are eventually
+    # consistent -- Apple's iTunes lookup in particular briefly re-serves the
+    # *previous* version -- so the observed version can dip and then recover. We
+    # always persist the true fetched version (so a genuine pull stays visible in
+    # state), but only announce an INFO_STORE "updated" when the store reaches a
+    # genuinely new high; a dip-and-recover to an already-announced version does
+    # not re-fire the notification.
+    prev_high = None if prev is None else (prev.store_high or prev.store_version)
+    if prev_high is None:
+        store_high = store_version
+    else:
+        store_high = store_version if compare(store_version, prev_high) > 0 else prev_high
+
     # First observation: seed the baseline silently, but warn immediately if it
     # is already out of sync.
     if prev is None or not prev.initialized:
@@ -83,10 +101,14 @@ def evaluate(prev, github_version, store_version, compare,
             events.append(Event(WARNING, github_version, store_version, initial=True))
             last_warned = now
         return EvalResult(events=events, warning_active=warn_condition,
-                          initialized=True, last_warned_at=last_warned)
+                          initialized=True, last_warned_at=last_warned,
+                          store_high=store_high)
 
     github_advanced = compare(github_version, prev.github_version) > 0
     store_advanced = compare(store_version, prev.store_version) > 0
+    # A genuinely new high -- not merely higher than last cycle, which a recovery
+    # from a transient dip also is -- is what gates the "updated" notification.
+    store_new_high = compare(store_version, prev_high) > 0
 
     events = []
     warning_active = prev.warning_active
@@ -118,11 +140,12 @@ def evaluate(prev, github_version, store_version, compare,
     if not events:
         if github_advanced:
             events.append(Event(INFO_GITHUB, github_version, store_version))
-        if store_advanced:
+        if store_new_high:
             events.append(Event(INFO_STORE, github_version, store_version))
 
     return EvalResult(events=events, warning_active=warning_active,
-                      initialized=True, last_warned_at=last_warned)
+                      initialized=True, last_warned_at=last_warned,
+                      store_high=store_high)
 
 
 class StateStore:
@@ -139,20 +162,23 @@ class StateStore:
                 store_version  TEXT NOT NULL,
                 warning_active INTEGER NOT NULL DEFAULT 0,
                 last_warned_at REAL,
+                store_high     TEXT,
                 updated_at     TEXT NOT NULL
             )
             """
         )
-        # Migrate databases created before last_warned_at existed.
+        # Migrate databases created before these columns existed.
         cols = [r[1] for r in self._conn.execute("PRAGMA table_info(platform_state)")]
         if "last_warned_at" not in cols:
             self._conn.execute("ALTER TABLE platform_state ADD COLUMN last_warned_at REAL")
+        if "store_high" not in cols:
+            self._conn.execute("ALTER TABLE platform_state ADD COLUMN store_high TEXT")
         self._conn.commit()
 
     def get(self, platform):
         row = self._conn.execute(
-            "SELECT github_version, store_version, warning_active, last_warned_at "
-            "FROM platform_state WHERE platform = ?",
+            "SELECT github_version, store_version, warning_active, last_warned_at, "
+            "store_high FROM platform_state WHERE platform = ?",
             (platform,),
         ).fetchone()
         if row is None:
@@ -163,21 +189,23 @@ class StateStore:
             warning_active=bool(row["warning_active"]),
             initialized=True,
             last_warned_at=row["last_warned_at"],
+            store_high=row["store_high"],
         )
 
     def upsert(self, platform, github_version, store_version, warning_active,
-               last_warned_at=None):
+               last_warned_at=None, store_high=None):
         self._conn.execute(
             """
             INSERT INTO platform_state
                 (platform, github_version, store_version, warning_active,
-                 last_warned_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                 last_warned_at, store_high, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(platform) DO UPDATE SET
                 github_version = excluded.github_version,
                 store_version  = excluded.store_version,
                 warning_active = excluded.warning_active,
                 last_warned_at = excluded.last_warned_at,
+                store_high     = excluded.store_high,
                 updated_at     = excluded.updated_at
             """,
             (
@@ -186,6 +214,7 @@ class StateStore:
                 store_version,
                 1 if warning_active else 0,
                 last_warned_at,
+                store_high,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )

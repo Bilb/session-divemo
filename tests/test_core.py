@@ -31,9 +31,9 @@ def kinds(result):
     return [e.kind for e in result.events]
 
 
-def synced(github, store, warning=False, last_warned=None):
+def synced(github, store, warning=False, last_warned=None, store_high=None):
     return PlatformState(github, store, warning_active=warning, initialized=True,
-                         last_warned_at=last_warned)
+                         last_warned_at=last_warned, store_high=store_high)
 
 
 class VersionUtilsTest(unittest.TestCase):
@@ -179,7 +179,10 @@ class StateStoreIntegrationTest(unittest.TestCase):
     def _step(self, store, platform, github, store_ver):
         prev = store.get(platform)
         result = evaluate(prev, github, store_ver, compare_versions)
-        store.upsert(platform, github, store_ver, result.warning_active)
+        # Persist the TRUE fetched versions (no clamping) plus the watermark,
+        # exactly as the bot does.
+        store.upsert(platform, github, store_ver, result.warning_active,
+                     result.last_warned_at, result.store_high)
         return kinds(result)
 
     def test_full_lifecycle(self):
@@ -296,6 +299,67 @@ class ReminderTest(unittest.TestCase):
         prev = synced("1.0.0", "1.1.0", warning=True, last_warned=0.0)
         result = evaluate(prev, "1.0.0", "1.1.0", CMP, now=self.INTERVAL * 10)
         self.assertEqual(kinds(result), [])
+
+
+class StoreWatermarkTest(unittest.TestCase):
+    """App stores are monotonic, but the APIs (Apple's iTunes lookup) are
+    eventually consistent and briefly re-serve the previous version. A
+    dip-and-recover must not re-fire the "updated" INFO_STORE, and the true
+    version must still be persisted so a genuine pull stays visible."""
+
+    def test_recover_to_prior_high_is_quiet(self):
+        # Store already reached 2.15.4 (recorded as the high); it dipped to
+        # 2.15.3 (persisted true) and now recovers. No duplicate INFO_STORE.
+        prev = synced("2.15.4", "2.15.3", store_high="2.15.4")
+        result = evaluate(prev, "2.15.4", "2.15.4", CMP)
+        self.assertEqual(kinds(result), [])
+        self.assertEqual(result.store_high, "2.15.4")
+
+    def test_new_high_still_notifies(self):
+        prev = synced("2.15.5", "2.15.4", store_high="2.15.4")
+        result = evaluate(prev, "2.15.5", "2.15.5", CMP)
+        self.assertEqual(kinds(result), [INFO_STORE])
+        self.assertEqual(result.store_high, "2.15.5")
+
+    def test_dip_is_quiet_and_persists_true_version(self):
+        # A backward reading is silent, but the watermark holds and the true
+        # (lower) version is what gets persisted -- so a real pull stays visible.
+        prev = synced("2.15.4", "2.15.4", store_high="2.15.4")
+        result = evaluate(prev, "2.15.4", "2.15.3", CMP)
+        self.assertEqual(kinds(result), [])
+        self.assertEqual(result.store_high, "2.15.4")
+
+
+class AppleFlapIntegrationTest(unittest.TestCase):
+    """The exact reported bug, driven through the real SQLite store."""
+
+    def _step(self, store, platform, github, store_ver):
+        prev = store.get(platform)
+        result = evaluate(prev, github, store_ver, compare_versions)
+        store.upsert(platform, github, store_ver, result.warning_active,
+                     result.last_warned_at, result.store_high)
+        return kinds(result)
+
+    def test_flap_fires_info_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(os.path.join(tmp, "state.db"))
+            try:
+                # GitHub already at 2.15.4, App Store still 2.15.3: seed quiet.
+                self.assertEqual(self._step(store, "ios", "2.15.4", "2.15.3"), [])
+                # App Store catches up -> the (single, legitimate) INFO_STORE.
+                self.assertEqual(
+                    self._step(store, "ios", "2.15.4", "2.15.4"), [INFO_STORE]
+                )
+                # Apple flaps back to 2.15.3: silent, but the TRUE version is
+                # persisted (a genuine pull would look exactly like this and
+                # stays visible), while the watermark holds at 2.15.4.
+                self.assertEqual(self._step(store, "ios", "2.15.4", "2.15.3"), [])
+                self.assertEqual(store.get("ios").store_version, "2.15.3")
+                self.assertEqual(store.get("ios").store_high, "2.15.4")
+                # Apple recovers to 2.15.4: NO duplicate notification.
+                self.assertEqual(self._step(store, "ios", "2.15.4", "2.15.4"), [])
+            finally:
+                store.close()
 
 
 if __name__ == "__main__":

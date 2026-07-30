@@ -21,7 +21,7 @@ all-clear once back in sync. Plus a `/versions` slash command.
 | `version_utils.py` | Version normalize + compare (uses `packaging.version`) |
 | `config.sample.yaml` | Committed template. Real config is `config.yaml` (git-ignored) |
 | `divemo.service` | Hardened systemd **system**-service template (generic `/opt` + dedicated user) |
-| `tests/test_core.py` | 32 unit/integration tests (pure logic + SQLite round-trip) |
+| `tests/test_core.py` | 36 unit/integration tests (pure logic + SQLite round-trip) |
 
 `bot.py`/`sources.py`/`state.py`/`version_utils.py` import each other flat (repo
 root is on `sys.path`), so run from the repo dir.
@@ -99,7 +99,7 @@ Channel/guild/tag IDs live in `config.yaml`.
 ```sh
 python3 bot.py -c config.yaml               # run the bot
 python3 bot.py -c config.yaml --check-once  # dry run: fetch+evaluate+print, no Discord
-python3 -m unittest discover tests          # 32 tests
+python3 -m unittest discover tests          # 36 tests
 ```
 
 ## Deployment (host: angus)
@@ -133,6 +133,16 @@ Logs: `journalctl -u divemo -f`.
 - **`discord.py` / Python:** `< 2.5` works on Python ≤ 3.12; **≥ 2.5 required on
   3.13+** (audioop). `requirements.txt` encodes this with environment markers.
 - **deb package is `session-desktop`**, not `session-messenger-desktop`.
+- **iTunes Lookup API is eventually consistent.** Apple's `itunes.apple.com/lookup`
+  briefly re-serves the *previous* version (CDN/region caching), so the observed
+  App Store version can dip and recover over hours. This once double-fired the
+  "App Store updated" `INFO_STORE`. Fix: `state.py` tracks a per-platform
+  `store_high` watermark and only announces `INFO_STORE` on a genuinely **new
+  high** — a dip-and-recover to an already-announced version is silent. The
+  *true* fetched version is still persisted (state never lies), so a genuine
+  version pull stays visible in `/versions`; we just don't proactively alert on a
+  decrease (indistinguishable from a transient flap for hours). App-store scoped;
+  `strict_sync` platforms keep exact behavior.
 - **`/versions` works without channel perms** (interaction responses bypass them);
   proactive `channel.send` alerts do **not** — hence the channel-permission need.
 - **Bot base class is `discord.Client` + `CommandTree`**, deliberately not

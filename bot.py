@@ -137,7 +137,7 @@ class VersionMonitorBot(discord.Client):
             await self._announce(name, pcfg, event, github, store)
         self.state.upsert(
             name, github.version, store.version,
-            result.warning_active, result.last_warned_at,
+            result.warning_active, result.last_warned_at, result.store_high,
         )
 
     # -- messaging -----------------------------------------------------------
@@ -314,7 +314,7 @@ def _run_check_once(config):
         )
         store.upsert(
             name, github.version, store_info.version,
-            result.warning_active, result.last_warned_at,
+            result.warning_active, result.last_warned_at, result.store_high,
         )
     store.close()
 
