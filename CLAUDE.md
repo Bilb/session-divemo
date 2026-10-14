@@ -16,12 +16,12 @@ all-clear once back in sync. Plus a `/versions` slash command.
 | File | Purpose |
 | --- | --- |
 | `bot.py` | Discord `Client` + `CommandTree`, poll loop (`tasks.loop`), message/embed formatting, `/versions`, CLI (`--check-once`), config loader |
-| `sources.py` | Version fetchers: GitHub, App Store, Play, deb repo, F-Droid; `STORE_DISPLAY_NAMES`; `fetch_store` dispatch |
+| `sources.py` | Version fetchers: GitHub, App Store, Play, deb repo, F-Droid, Flathub; `STORE_DISPLAY_NAMES`; `fetch_store` dispatch |
 | `state.py` | SQLite `StateStore` + the **pure** transition state machine `evaluate()` (all decision logic; no IO) |
 | `version_utils.py` | Version normalize + compare (uses `packaging.version`) |
 | `config.sample.yaml` | Committed template. Real config is `config.yaml` (git-ignored) |
 | `divemo.service` | Hardened systemd **system**-service template (generic `/opt` + dedicated user) |
-| `tests/test_core.py` | 36 unit/integration tests (pure logic + SQLite round-trip) |
+| `tests/test_core.py` | 40 unit/integration tests (pure logic + SQLite round-trip) |
 
 `bot.py`/`sources.py`/`state.py`/`version_utils.py` import each other flat (repo
 root is on `sys.path`), so run from the repo dir.
@@ -48,10 +48,18 @@ root is on `sys.path`), so run from the repo dir.
     - **live** — `https://fdroid.getsession.org/fdroid/repo/index-v1.json` (the
       served repo F-Droid clients pull). App-store semantics: behind = deploy lag
       (info only), not a warning.
+- **Desktop → Flathub** (two checks, both vs the **session-desktop** GitHub release),
+  app id **`network.loki.Session`**. flathubbot opens an "Update … to X.Y.Z" PR on
+  `flathub/network.loki.Session` (default branch **`master`**) per release; it must be merged.
+    - **merged** (`flathub_manifest`, `strict_sync`) — newest `<release version>` in
+      `network.loki.Session.metainfo.xml` on that branch, via raw.githubusercontent.
+    - **live** (`flathub`) — `flathub.org/api/v2/appstream/network.loki.Session` →
+      newest `releases[].version`. Its CDN nodes disagree for a while after a publish
+      (same flap as iTunes; the `store_high` watermark keeps it quiet).
 - **GitHub**: `api.github.com/repos/session-foundation/session-{android,ios,desktop}/releases/latest`.
   Tag prefixes differ (desktop is `v1.18.1`; android/ios have no `v`); `normalize_version` strips a leading `v`.
-  `session-android` backs three platforms (Play + both F-Droid checks) but is
-  fetched **once per cycle** — `check_versions` memoizes GitHub results by repo.
+  `session-android` backs three platforms (Play + both F-Droid checks) and
+  `session-desktop` three (APT + both Flathub checks), but each is fetched **once per cycle** — `check_versions` memoizes GitHub results by repo.
 
 ## Alert semantics (state machine in `state.py:evaluate`)
 
@@ -71,7 +79,7 @@ State (versions, `warning_active`, `last_warned_at`) is latched in SQLite, so
 warnings fire once, reminders are paced, and all-clears only follow a warning —
 across restarts. First observation of a platform seeds silently unless already
 out of sync. `/versions` is public and labels each source (Play Store / App
-Store / APT repo / F-Droid repo).
+Store / APT repo / F-Droid repo / Flathub).
 
 ## Config
 
@@ -84,7 +92,7 @@ per-platform tag user IDs). Key fields:
 - `github.token` — **intentionally blank**; see "no GitHub token" below.
 - `state_db` — SQLite path.
 - `platforms.<name>`: `display_name`, `github_repo`, `store:` block, `tag_user_ids`,
-  and `strict_sync: true` (desktop APT + the **F-Droid *merged*** check).
+  and `strict_sync: true` (desktop APT + the **F-Droid/Flathub *merged*** checks).
   Several platforms may share one `github_repo` (Android's Play + both F-Droid
   checks all use `session-android`).
 
@@ -99,7 +107,7 @@ Channel/guild/tag IDs live in `config.yaml`.
 ```sh
 python3 bot.py -c config.yaml               # run the bot
 python3 bot.py -c config.yaml --check-once  # dry run: fetch+evaluate+print, no Discord
-python3 -m unittest discover tests          # 36 tests
+python3 -m unittest discover tests          # 40 tests
 ```
 
 ## Deployment (host: angus)

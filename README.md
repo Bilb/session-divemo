@@ -9,6 +9,7 @@ published GitHub release**, and posts to a Discord channel when they diverge.
 | Session Android  | `session-android` | Google Play listing (scraped — no official API exists)  |
 | Session iOS      | `session-ios`     | App Store, via the public iTunes lookup API             |
 | Session Desktop  | `session-desktop` | `deb.session.foundation` apt repo (`sid` `Packages.gz`) |
+| Session Desktop  | `session-desktop` | Flathub `network.loki.Session`: merged manifest + live appstream API |
 
 ## What it posts
 

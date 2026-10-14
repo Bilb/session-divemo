@@ -100,3 +100,30 @@ platforms:
     tag_user_ids:
       - 444444444444444444
       - 555555555555555555
+
+  # Session Desktop is also on Flathub (network.loki.Session). flathubbot opens
+  # an "Update ... to X.Y.Z" PR on flathub/network.loki.Session for each
+  # session-desktop release, which must be merged to ship it. Same two checks
+  # as F-Droid, both against the session-desktop GitHub release:
+  desktop_flathub_merged:
+    display_name: "Session Desktop (Flathub, merged)"
+    github_repo: "session-desktop"
+    # Warns while the update PR is unmerged.
+    strict_sync: true
+    store:
+      store: flathub_manifest
+      app_id: "network.loki.Session"
+      # repo defaults to flathub/<app_id>; its default branch is "master".
+      branch: "master"
+    tag_user_ids:
+      - 444444444444444444
+
+  desktop_flathub_live:
+    display_name: "Session Desktop (Flathub, live)"
+    github_repo: "session-desktop"
+    # What Flathub serves. Behind = build/publish lag after the merge -> info only.
+    store:
+      store: flathub
+      app_id: "network.loki.Session"
+    tag_user_ids:
+      - 444444444444444444

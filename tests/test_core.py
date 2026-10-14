@@ -10,7 +10,13 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sources import _fdroid_version, _packages_version  # noqa: E402
+from sources import (  # noqa: E402
+    SourceError,
+    _fdroid_version,
+    _metainfo_version,
+    _newest_version,
+    _packages_version,
+)
 from state import (  # noqa: E402
     ALL_CLEAR,
     INFO_GITHUB,
@@ -171,6 +177,33 @@ class FdroidParseTest(unittest.TestCase):
         self.assertIsNone(_fdroid_version(self.SAMPLE, "nope"))
         self.assertIsNone(_fdroid_version({"packages": {}}, "network.loki.messenger"))
         self.assertIsNone(_fdroid_version({}, "network.loki.messenger"))
+
+
+class FlathubParseTest(unittest.TestCase):
+    METAINFO = b"""<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>network.loki.Session</id>
+  <releases>
+    <release version="1.18.1" date="2026-07-09"/>
+    <release version="1.18.2" date="2026-10-13"><description/></release>
+    <release version="1.9.0" date="2022-01-01"/>
+  </releases>
+</component>
+"""
+
+    def test_metainfo_newest_regardless_of_order(self):
+        self.assertEqual(_metainfo_version(self.METAINFO), "1.18.2")
+
+    def test_metainfo_without_releases(self):
+        self.assertIsNone(_metainfo_version(b"<component><id>x</id></component>"))
+
+    def test_metainfo_malformed(self):
+        with self.assertRaises(SourceError):
+            _metainfo_version(b"<component>")
+
+    def test_newest_version(self):
+        self.assertEqual(_newest_version(["1.9.0", "v1.10.0", None, ""]), "1.10.0")
+        self.assertIsNone(_newest_version([]))
 
 
 class StateStoreIntegrationTest(unittest.TestCase):
